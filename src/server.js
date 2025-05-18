@@ -2,6 +2,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import Notification from './models/Notification.js';
+import { Kafka } from 'kafkajs';
+
 
 dotenv.config();
 
@@ -15,6 +17,17 @@ mongoose.connect(process.env.MONGO_URI, {
 mongoose.connection.once('open', () => {
   console.log('✅ Connected to MongoDB (API)');
 });
+
+const kafka = new Kafka({
+  clientId: 'notification-api',
+  brokers: [process.env.KAFKA_BROKER],
+});
+
+const producer = kafka.producer();
+
+await producer.connect();
+console.log('✅ Kafka Producer connected (API)');
+
 
 // Middleware
 app.use(express.json());
@@ -43,4 +56,32 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
+
+app.post('/notifications', async (req, res) => {
+  const { userId, type, content } = req.body;
+
+  if (!userId || !type || !content) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const message = {
+    userId,
+    type,
+    content,
+    status: 'pending',
+    createdAt: new Date(),
+  };
+
+  try {
+    await producer.send({
+      topic: 'notifications',
+      messages: [{ value: JSON.stringify(message), partition: 0 }],
+    });
+
+    res.status(200).json({ success: true, message: 'Notification queued' });
+  } catch (err) {
+    console.error('❌ Failed to send message to Kafka:', err.message);
+    res.status(500).json({ error: 'Kafka error' });
+  }
 });
